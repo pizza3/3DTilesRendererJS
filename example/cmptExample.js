@@ -6,14 +6,70 @@ import {
 	WebGLRenderer,
 	PerspectiveCamera,
 	PCFSoftShadowMap,
+	Group,
+	Raycaster,
+	Vector2,
+	ShaderLib,
+	UniformsUtils,
+	ShaderMaterial,
+	Color,
+	Box3
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-let camera, controls, scene, renderer;
+let camera, controls, scene, renderer, offsetGroup;
+let raycaster, mouse, model;
+let infoEl;
 let dirLight;
 
 init();
 animate();
+
+
+// Adjusts the three.js standard shader to include batchid highlight
+function batchIdHighlightShaderMixin( shader ) {
+
+	const newShader = { ...shader };
+	newShader.uniforms = {
+		highlightedBatchId: { value: - 1 },
+		highlightColor: { value: new Color( 0xFFC107 ).convertSRGBToLinear() },
+		...UniformsUtils.clone( shader.uniforms ),
+	};
+	newShader.extensions = {
+		derivatives: true,
+	};
+	newShader.lights = true;
+	newShader.vertexShader =
+		`
+			attribute float _batchid;
+			varying float batchid;
+		` +
+		newShader.vertexShader.replace(
+			/#include <uv_vertex>/,
+			`
+			#include <uv_vertex>
+			batchid = _batchid;
+			`
+		);
+	newShader.fragmentShader =
+		`
+			varying float batchid;
+			uniform float highlightedBatchId;
+			uniform vec3 highlightColor;
+		` +
+		newShader.fragmentShader.replace(
+			/vec4 diffuseColor = vec4\( diffuse, opacity \);/,
+			`
+			vec4 diffuseColor =
+				abs( batchid - highlightedBatchId ) < 0.5 ?
+				vec4( highlightColor, opacity ) :
+				vec4( diffuse, opacity );
+			`
+		);
+
+	return newShader;
+
+}
 
 function init() {
 
@@ -56,20 +112,100 @@ function init() {
 
 	const ambLight = new AmbientLight( 0xffffff, 0.05 );
 	scene.add( ambLight );
+	offsetGroup = new Group();
+	scene.add( offsetGroup );
 
 	new CMPTLoader()
-		.load( '...' )
+		.load( 'https://raw.githubusercontent.com/CesiumGS/cesium/main/Specs/Data/Cesium3DTiles/Composite/Composite/composite.cmpt' )
 		.then( res => {
 
 			console.log( res );
 
-			// console.log( res );
-			// scene.add( res.scene );
+			model = res.scene;
+			offsetGroup.add( model );
+
+			const box = new Box3();
+			box.setFromObject( model );
+			box.getCenter( offsetGroup.position ).multiplyScalar( - 1 );
+
+			model.traverse( c => {
+
+				if ( c.isMesh ) {
+
+					c.material = new ShaderMaterial( batchIdHighlightShaderMixin( ShaderLib.standard ) );
+
+				}
+
+			} );
 
 		} );
 
+	raycaster = new Raycaster();
+	mouse = new Vector2();
+
 	onWindowResize();
 	window.addEventListener( 'resize', onWindowResize, false );
+	renderer.domElement.addEventListener( 'mousemove', onMouseMove, false );
+
+}
+
+function onMouseMove( e ) {
+
+	const bounds = this.getBoundingClientRect();
+	mouse.x = e.clientX - bounds.x;
+	mouse.y = e.clientY - bounds.y;
+	mouse.x = ( mouse.x / bounds.width ) * 2 - 1;
+	mouse.y = - ( mouse.y / bounds.height ) * 2 + 1;
+
+	raycaster.setFromCamera( mouse, camera );
+
+	// Get the batch table data
+	const intersects = raycaster.intersectObject( scene, true );
+	let hoveredBatchid = - 1;
+	if ( intersects.length ) {
+
+		const { face, object } = intersects[ 0 ];
+		const batchidAttr = object.geometry.getAttribute( '_batchid' );
+		if ( batchidAttr ) {
+
+			// Traverse the parents to find the batch table.
+			let batchTableObject = object;
+			while ( ! batchTableObject.batchTable ) {
+
+				batchTableObject = batchTableObject.parent;
+
+			}
+
+			// Log the batch data
+			const batchTable = batchTableObject.batchTable;
+			hoveredBatchid = batchidAttr.getX( face.a );
+			infoEl.innerText =
+				`_batchid   : ${ hoveredBatchid }\n` +
+				`Latitude   : ${ batchTable.getData( 'Latitude' )[ hoveredBatchid ].toFixed( 3 ) }\n` +
+				`Longitude  : ${ batchTable.getData( 'Longitude' )[ hoveredBatchid ].toFixed( 3 ) }\n` +
+				`Height     : ${ batchTable.getData( 'Height' )[ hoveredBatchid ].toFixed( 3 ) }\n`;
+
+		}
+
+	} else {
+
+		infoEl.innerText = '';
+
+	}
+
+	if ( model ) {
+
+		model.traverse( c => {
+
+			if ( c.isMesh ) {
+
+				c.material.uniforms.highlightedBatchId.value = hoveredBatchid;
+
+			}
+
+		} );
+
+	}
 
 }
 
