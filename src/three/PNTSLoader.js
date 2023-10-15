@@ -9,7 +9,7 @@ import {
 	Color,
 } from 'three';
 import { rgb565torgb } from '../utilities/rgb565torgb.js';
-
+import { octDecodeInRange } from '../utilities/octDecodeInRange.js';
 const DRACO_ATTRIBUTE_MAP = {
 	RGB: 'color',
 	POSITION: 'position',
@@ -82,6 +82,8 @@ export class PNTSLoader extends PNTSLoaderBase {
 				// handle non compressed case
 				const POINTS_LENGTH = featureTable.getData( 'POINTS_LENGTH' );
 				const POSITION = featureTable.getData( 'POSITION', POINTS_LENGTH, 'FLOAT', 'VEC3' );
+				const NORMAL = featureTable.getData( 'NORMAL', POINTS_LENGTH, 'FLOAT', 'VEC3' );
+				const NORMAL_OCT16P = featureTable.getData( 'NORMAL_OCT16P', POINTS_LENGTH, 'UNSIGNED_BYTE', 'VEC2' );
 				const RGB = featureTable.getData( 'RGB', POINTS_LENGTH, 'UNSIGNED_BYTE', 'VEC3' );
 				const RGBA = featureTable.getData( 'RGBA', POINTS_LENGTH, 'UNSIGNED_BYTE', 'VEC4' );
 				const RGB565 = featureTable.getData( 'RGB565', POINTS_LENGTH, 'UNSIGNED_SHORT', 'SCALAR' );
@@ -160,12 +162,32 @@ export class PNTSLoader extends PNTSLoaderBase {
 
 				}
 
+				if ( NORMAL ) {
+
+					geometry.setAttribute( 'normal', new BufferAttribute( NORMAL, 3, false ) );
+
+				} else if ( NORMAL_OCT16P ) {
+
+					const decodedNormals = new Float32Array( POINTS_LENGTH * 3 );
+					for ( let i = 0; i < POINTS_LENGTH * 2; i += 2 ) {
+
+						const normal = octDecodeInRange( NORMAL_OCT16P[ i ], NORMAL_OCT16P[ i + 1 ], 255 );
+						for ( let j = 0; j < 3; j ++ ) {
+
+							const index = 3 * ( i / 2 ) + j;
+							decodedNormals[ index ] = normal[ j ];
+
+						}
+
+					}
+					geometry.setAttribute( 'normal', new BufferAttribute( decodedNormals, 3, false ) );
+
+				}
+
 			}
 
 			[
 				'BATCH_LENGTH',
-				'NORMAL',
-				'NORMAL_OCT16P',
 			].forEach( ( feature ) => {
 
 				if ( feature in featureTable.header ) {
